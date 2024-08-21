@@ -8,20 +8,12 @@ urlpatterns = [
     path('logout/', LogoutView.as_view(), name='logout'),
 
     path('departments/', DepartmentListCreateView.as_view(), name='department-list-create'),
-    path('departments/<int:pk>/doctors/', DepartmentDoctorsView.as_view(), name='department-doctors'),
-    path('departments/<int:pk>/patients/', DepartmentPatientsView.as_view(), name='department-patients'),
-    
-    path('doctors/', DoctorListCreateView.as_view(), name='doctor-list-create'),
-    path('doctors/<int:pk>/', DoctorDetailView.as_view(), name='doctor-detail'),
-
-    path('patients/', PatientListCreateView.as_view(), name='patient-list-create'),
+    path('patient_records/', PatientRecordView.as_view(), name='patient-record-list'),
     path('patients/<int:pk>/', PatientDetailView.as_view(), name='patient-detail'),
-
-    path('patient_records/', PatientRecordsListCreateView.as_view(), name='patient-records-list-create'),
-    path('patient_records/<int:pk>/', PatientRecordsDetailView.as_view(), name='patient-records-detail'),
-
-
-
-
-    path('doctor/profile/update/', DoctorProfileUpdateView.as_view(), name='doctor-profile-update'),
+    path('doctors/<int:pk>/', DoctorProfileView.as_view(), name='doctor-profile-detail'),
+    path('patient_records/<int:pk>/', PatientRecordDetailView.as_view(), name='patient-record-detail'),
+    path('doctors/', DoctorListView.as_view(), name='doctor-list'),
+    path('patients/', PatientListView.as_view(), name='patient-list'),
+    path('department/<int:pk>/doctors/', DepartmentDoctorListView.as_view(), name='department-doctors'),
+    path('department/<int:pk>/patients/', DepartmentPatientListView.as_view(), name='department-patients'),
 ]

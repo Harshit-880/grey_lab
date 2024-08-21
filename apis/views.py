@@ -9,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from .models import *
 from django.shortcuts import get_object_or_404
 from rest_framework import generics
+from django.shortcuts import redirect
 
 
 # Create your views here.
@@ -39,8 +40,6 @@ class UserLoginView(APIView):
     serializer.is_valid(raise_exception=True)
     email = serializer.data.get('email')
     password = serializer.data.get('password')
-    print(f"Attempting to authenticate: email={email}, password={password}")
-    print(f"User exists: {User.objects.filter(email=email).exists()}")
 
     user = authenticate(email=email, password=password)
 
@@ -82,99 +81,214 @@ class DepartmentListCreateView(APIView):
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
 
-# List Doctors in a Department (Function-Based)
-class DepartmentDoctorsView(APIView):
+
+
+class PatientRecordView(APIView):
     permission_classes = [IsAuthenticated]
+    renderer_classes = [UserRenderer]  # Use the custom renderer
 
-    def get(self, request, pk):
-        department = get_object_or_404(Department, pk=pk)
-        doctors = DoctorProfile.objects.filter(department=department)
-        serializer = DoctorProfileSerializer(doctors, many=True)
-        return Response(serializer.data)
+    def get(self, request, *args, **kwargs):
+        doctor = request.user
+        department = doctor.doctorprofile.department
 
-# List Patients in a Department (Function-Based)
-class DepartmentPatientsView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, pk):
-        department = get_object_or_404(Department, pk=pk)
-        patients = PatientProfile.objects.filter(department=department)
-        serializer = PatientProfileSerializer(patients, many=True)
-        return Response(serializer.data)
-    
-class PatientRecordsListCreateView(generics.ListCreateAPIView):
-    serializer_class = PatientRecordsSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        return PatientRecords.objects.filter(doctor__user=self.request.user)
-
-    def perform_create(self, serializer):
-        serializer.save(doctor=self.request.user.doctorprofile)
-
-# Retrieve, Update, and Delete a Patient Record (Class-Based)
-class PatientRecordsDetailView(generics.RetrieveUpdateDestroyAPIView):
-    serializer_class = PatientRecordsSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_object(self):
-        user = self.request.user
-        if user.role == 'Patient':
-            return get_object_or_404(PatientRecords, patient=user.patientprofile, pk=self.kwargs['pk'])
-        return get_object_or_404(PatientRecords, doctor__user=user, pk=self.kwargs['pk'])
-    
-
-class PatientListCreateView(generics.ListCreateAPIView):
-    queryset = PatientProfile.objects.all()
-    serializer_class = PatientProfileSerializer
-    permission_classes = [IsAuthenticated]
-
-# Retrieve, Update, and Delete a Patient Profile (Class-Based)
-class PatientDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = PatientProfile.objects.all()
-    serializer_class = PatientProfileSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_object(self):
-        user = self.request.user
-        if user.role == 'Patient':
-            return user.patientprofile
-        return get_object_or_404(PatientProfile, pk=self.kwargs['pk'], department=user.doctorprofile.department)
-    
-
-class DoctorListCreateView(generics.ListCreateAPIView):
-    queryset = DoctorProfile.objects.all()
-    serializer_class = DoctorProfileSerializer
-    permission_classes = [IsAuthenticated]
-
-# Retrieve, Update, and Delete a Doctor Profile (Class-Based)
-class DoctorDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = DoctorProfile.objects.all()
-    serializer_class = DoctorProfileSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_object(self):
-        return self.request.user.doctorprofile
-    
-
-
-
-
-
-class DoctorProfileUpdateView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def put(self, request):
-        doctor = get_object_or_404(DoctorProfile, user=request.user)
-        serializer = ProfileUpdateSerializer(data=request.data)
+        # Fetch all records where the patient is in the same department as the doctor
+        records = PatientRecords.objects.filter(department=department)
         
+        if not records.exists():
+            return Response({"message": "No records exist for your department."}, status=status.HTTP_200_OK)
+        
+        serializer = PatientRecordSerializer(records, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request, *args, **kwargs):
+        doctor = request.user
+        serializer = PatientRecordSerializer(data=request.data, context={'request': request})
+
         if serializer.is_valid():
-            department = serializer.validated_data.get('department')
-            
-            if department:
-                doctor.department = department
-                doctor.save()
-            
-            return Response({'message': 'Doctor profile updated successfully'}, status=status.HTTP_200_OK)
-        
+            serializer.save(doctor=doctor.doctorprofile)  # Ensure the doctor is a DoctorProfile instance
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class PatientDetailView(APIView):
+    renderer_classes = [UserRenderer]  # Use the custom renderer
+
+    def get(self, request, pk, *args, **kwargs):
+        doctor = request.user
+        patient = get_object_or_404(PatientProfile, pk=pk)
+
+        # Allow fetching if the department is the same or NULL
+        if patient.department is None or patient.department == doctor.doctorprofile.department:
+            serializer = PatientProfileSerializer(patient)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        else:
+            return Response({"error": "You do not have permission to view this patient profile."}, status=status.HTTP_403_FORBIDDEN)
+
+    def put(self, request, pk, *args, **kwargs):
+        doctor = request.user
+        patient = get_object_or_404(PatientProfile, pk=pk)
+
+        # Allow updating only if the doctor and patient are in the same department
+        if patient.department is None or patient.department == doctor.doctorprofile.department:
+            serializer = PatientProfileSerializer(patient, data=request.data, context={'request': request})
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({"error": "You do not have permission to update this patient profile."}, status=status.HTTP_403_FORBIDDEN)
+
+    def delete(self, request, pk, *args, **kwargs):
+        doctor = request.user
+        patient = get_object_or_404(PatientProfile, pk=pk)
+
+        # Allow deletion if the department is the same or NULL
+        if patient.department is None or patient.department == doctor.doctorprofile.department:
+            user = patient.user
+            patient.delete()
+            user.delete()
+            return Response({"success": "Patient profile and associated user deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+        else:
+            return Response({"error": "You do not have permission to delete this patient profile."}, status=status.HTTP_403_FORBIDDEN)
+
+
+class DoctorProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk, *args, **kwargs):
+        try:
+            doctor_profile = DoctorProfile.objects.get(pk=pk, user=request.user)
+        except DoctorProfile.DoesNotExist:
+            return Response({"message": "Profile does not exist."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = DoctorProfileSerializer(doctor_profile)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request, pk, *args, **kwargs):
+        try:
+            doctor_profile = DoctorProfile.objects.get(pk=pk, user=request.user)
+        except DoctorProfile.DoesNotExist:
+            return Response({"message": "Profile does not exist."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = DoctorProfileSerializer(doctor_profile, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk, *args, **kwargs):
+        try:
+            doctor_profile = DoctorProfile.objects.get(pk=pk, user=request.user)
+        except DoctorProfile.DoesNotExist:
+            return Response({"message": "Profile does not exist."}, status=status.HTTP_404_NOT_FOUND)
+
+        doctor_profile.delete()
+        return Response({"message": "Profile deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+    
+
+
+class PatientRecordDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk, *args, **kwargs):
+        try:
+            record = PatientRecords.objects.get(pk=pk)
+        except PatientRecords.DoesNotExist:
+            return Response({"message": "Record does not exist."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check if the requesting doctor is in the same department as the patient record
+        doctor = request.user
+        if record.department != doctor.doctorprofile.department:
+            return Response({"message": "You do not have permission to access this record."}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = PatientRecordSerializer(record)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request, pk, *args, **kwargs):
+        try:
+            record = PatientRecords.objects.get(pk=pk)
+        except PatientRecords.DoesNotExist:
+            return Response({"message": "Record does not exist."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check if the requesting doctor is in the same department as the patient record
+        doctor = request.user
+        if record.department != doctor.doctorprofile.department:
+            return Response({"message": "You do not have permission to update this record."}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = PatientRecordSerializer(record, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk, *args, **kwargs):
+        try:
+            record = PatientRecords.objects.get(pk=pk)
+        except PatientRecords.DoesNotExist:
+            return Response({"message": "Record does not exist."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check if the requesting doctor is in the same department as the patient record
+        doctor = request.user
+        if record.department != doctor.doctorprofile.department:
+            return Response({"message": "You do not have permission to delete this record."}, status=status.HTTP_403_FORBIDDEN)
+
+        record.delete()
+        return Response({"message": "Record deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+    
+class DoctorListView(APIView):
+    def get(self, request, *args, **kwargs):
+        doctors = DoctorProfile.objects.all()
+        serializer = DoctorListSerializer(doctors, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request, *args, **kwargs):
+        # Redirect to the login URL (replace with your actual login URL)
+        return redirect('register')
+
+class PatientListView(APIView):
+    def get(self, request, *args, **kwargs):
+
+        patients = PatientProfile.objects.all()
+        serializer = PatientListSerializer(patients, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request, *args, **kwargs):
+        # Redirect to the registration URL (replace with your actual registration URL)
+        return redirect('register')
+
+
+class DepartmentDoctorListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk, *args, **kwargs):
+        try:
+            department = Department.objects.get(pk=pk)
+        except Department.DoesNotExist:
+            return Response({"error": "Department not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Ensure the requesting doctor is from the same department
+        doctor = request.user.doctorprofile
+        if doctor.department != department:
+            return Response({"error": "You do not have permission to view doctors in this department."}, status=status.HTTP_403_FORBIDDEN)
+
+        doctors = DoctorProfile.objects.filter(department=department)
+        serializer = DoctorListSerializer(doctors, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+
+class DepartmentPatientListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk, *args, **kwargs):
+        try:
+            department = Department.objects.get(pk=pk)
+        except Department.DoesNotExist:
+            return Response({"error": "Department not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Ensure the requesting doctor is from the same department
+        doctor = request.user.doctorprofile
+        if doctor.department != department:
+            return Response({"error": "You do not have permission to view patients in this department."}, status=status.HTTP_403_FORBIDDEN)
+
+        patients = PatientProfile.objects.filter(department=department)
+        serializer = PatientListSerializer(patients, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
